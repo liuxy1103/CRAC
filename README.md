@@ -33,31 +33,22 @@ Take the training on the AC3 dataset as an example.
 ### 1. train CPSN
 
 ```shell
-python pre_training.py -c=pretraining_snemi3d
+python main_CPSN.py --cfg=CPSN_config
 ```
 
 ### 2. train CRAC
 
-Weight Sharing (WS)
-
 ```shell
-python main.py -c=seg_snemi3d_d5_u200
+python main_CRAC.py -c=CRAC_config
 ```
 
-EMA
-
-```shell
-python main_ema.py -c=seg_snemi3d_d5_1024_u200_ema
-```
 
 
 
 ## Validation stage
 
-Take the validation on the AC3 dataset as an example.
-
 ```shell
- python inference.py -c=seg_snemi3d_d5_1024_u200 -mn=seg_ac3_d5_1024_u200_WS -id=seg_ac3_d5_1024_u200_WS -m=snemi3d-ac3
+ python inference_embs.py 
 ```
 
 
