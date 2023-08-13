@@ -24,27 +24,19 @@ docker pull registry.cn-hangzhou.aliyuncs.com/renwu527/auto-emseg:v3.1
 ```
 
 
-## Dataset
-
-| Datasets   | Sizes                        | Resolutions | Species | Download (Processed) |
-| ---------- | ---------------------------- | ----------- | ----------- | ----------- |
-| [AC3/AC4 ](https://software.rc.fas.harvard.edu/lichtman/vast/AC3AC4Package.zip)   | 1024x1024x256, 1024x1024x100 | 6x6x30 nm^3 | Mouse | [BaiduYun](https://pan.baidu.com/s/1sSTkh7g9tccb_uZOvySQqQ) (Access code: weih) or [GoogleDrive](https://drive.google.com/drive/folders/1JAdoKchlWrHnbTXvnFn6pWWwx6VIiMH3?usp=sharing) |
-| [CREMI](https://cremi.org/)      | 1250x1250x125 (x3)           | 4x4x40 nm^3 | Drosophila | [BaiduYun](https://pan.baidu.com/s/1q-irVm5aoSXL5eQiqyYs1w) (Access code: weih) or [GoogleDrive](https://drive.google.com/drive/folders/1JAdoKchlWrHnbTXvnFn6pWWwx6VIiMH3?usp=sharing) |
-| [Kasthuri15](https://lichtman.rc.fas.harvard.edu/vast/Thousands_6nm_spec_lossless.vsv) | 10747x12895x1850             | 6x6x30 nm^3 | Mouse | [BaiduYun](https://pan.baidu.com/s/136Eml2gBHYIklVPP0MI_kQ) (Access code: weih) or [GoogleDrive](https://drive.google.com/drive/folders/1JAdoKchlWrHnbTXvnFn6pWWwx6VIiMH3?usp=sharing) |
-
 
 
 ## Training stage
 
 Take the training on the AC3 dataset as an example.
 
-### 1. Pre-training
+### 1. train CPSN
 
 ```shell
 python pre_training.py -c=pretraining_snemi3d
 ```
 
-### 2. Consistency learning
+### 2. train CRAC
 
 Weight Sharing (WS)
 
@@ -64,7 +56,9 @@ python main_ema.py -c=seg_snemi3d_d5_1024_u200_ema
 
 Take the validation on the AC3 dataset as an example.
 
-
+```shell
+ python inference.py -c=seg_snemi3d_d5_1024_u200 -mn=seg_ac3_d5_1024_u200_WS -id=seg_ac3_d5_1024_u200_WS -m=snemi3d-ac3
+```
 
 
 
