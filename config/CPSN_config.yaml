@@ -40,7 +40,7 @@ TRAIN:
         - 10000
         - 15000
         - 20000
-    model_path: '/braindat/lab/liuxy/sparse_annotation/SPOCO/EM_3d/models/2022-09-04--03-18-31_data100_ac3_sparse5_long234927_aff10_embw10_psdw1_ctw0_batch2_crossori_thresAuto_modeling_entropy_percent0.005'
+    model_path: ' '
     cache_path: '../caches/'
     cache_path2: '../output/caches2/'
     save_path: '../models/'
