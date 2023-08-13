@@ -34,7 +34,7 @@ TRAIN:
     if_valid: True
     if_seg: True
     SCPN_model_id: 191000
-    model_SCPN_path: '/braindat/lab/liuxy/sparse_annotation/SPOCO/EM_3d/models/2023-02-10--13-02-18_data100_ac3_sparse5_long234927_model_SCPN0.1'
+    model_SCPN_path: ''
     cache_path2: '../output/caches2/'
     cache_path: '../caches/'
     save_path: '../models/'
