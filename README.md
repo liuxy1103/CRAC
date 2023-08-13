@@ -1,7 +1,7 @@
 # Learning Cross-Representation Affinity Consistency for Sparsely Supervised Biomedical Instance Segmentation
 **Accepted by ICCV-2023**
 
-Xiaoyu Liu, Wei Huang, Zhiwei Xiong*, Shenglong Zhou, Yueyi Zhang, Xuejin Chen, Zhengjun Zha, and Feng Wu 
+Xiaoyu Liu, Wei Huang, Zhiwei Xiong*, Shenglong Zhou, Yueyi Zhang, Xuejin Chen, Zheng-jun Zha, and Feng Wu 
 
 University of Science and Technology of China (USTC), Hefei, China
 
