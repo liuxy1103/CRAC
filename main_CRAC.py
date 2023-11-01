@@ -238,13 +238,14 @@ def build_model_SCPN(cfg, writer):
     print('Building model on ', end='', flush=True)
     t1 = time.time()
     device = torch.device('cuda:0')
-    model = SCPNNetwork().cuda()
+    global  SCPNN
+    SCPNN = SCPNNetwork().cuda()
 
     cuda_count = torch.cuda.device_count()
     if cuda_count > 1:
         if cfg.TRAIN.batch_size % cuda_count == 0:
             print('%d GPUs ... ' % cuda_count, end='', flush=True)
-            model = nn.DataParallel(model)
+            SCPNN = nn.DataParallel( SCPNN)
         else:
             raise AttributeError('Batch size (%d) cannot be equally divided by GPU number (%d)' % (cfg.TRAIN.batch_size, cuda_count))
     else:
@@ -257,23 +258,16 @@ def build_model_SCPN(cfg, writer):
 
     if os.path.isfile(model_path): 
         checkpoint = torch.load(model_path)
-        model.load_state_dict(checkpoint['model_weights'])
+        SCPNN.load_state_dict(checkpoint['model_weights'])
         # optimizer.load_state_dict(checkpoint['optimizer_weights'])
         
     else:
         raise AttributeError('No checkpoint found at %s' % model_path)
     print('Done (time: %.2fs)' % (time.time() - t1))
     print('valid %d' % checkpoint['current_iter'])
-    for k, v in model.named_parameters():
+    for k, v in SCPNN.named_parameters():
         v.requires_grad = False
-
-
-    return model
-
-
-
-
-
+    return SCPNN
 
 def resume_params(cfg, model, optimizer, resume):
     if resume:
@@ -293,6 +287,25 @@ def resume_params(cfg, model, optimizer, resume):
     else:
         return model, optimizer, 0
 
+def resume_params_aff(cfg, model, optimizer, resume):
+    if resume:
+        t1 = time.time()
+        model_path = os.path.join(cfg.save_path, 'model_aff-%06d.ckpt' % cfg.TRAIN.model_id)
+
+        print('Resuming weights from %s ... ' % model_path, end='', flush=True)
+        if os.path.isfile(model_path):
+            checkpoint = torch.load(model_path)
+            model.load_state_dict(checkpoint['model_weights'])
+            # optimizer.load_state_dict(checkpoint['optimizer_weights'])
+        else:
+            raise AttributeError('No checkpoint found at %s' % model_path)
+        print('Done (time: %.2fs)' % (time.time() - t1))
+        print('valid %d' % checkpoint['current_iter'])
+        return model, optimizer, checkpoint['current_iter']
+    else:
+        return model, optimizer, 0
+
+
 def calculate_lr(iters):
     if iters < cfg.TRAIN.warmup_iters:
         current_lr = (cfg.TRAIN.base_lr - cfg.TRAIN.end_lr) * pow(float(iters) / cfg.TRAIN.warmup_iters, cfg.TRAIN.power) + cfg.TRAIN.end_lr
@@ -304,7 +317,7 @@ def calculate_lr(iters):
     return current_lr
 
 
-def loop(cfg, train_provider, valid_provider, model,model2, SCPN, criterion, optimizer, iters, writer):
+def loop(cfg, train_provider, valid_provider, model,model2, criterion, optimizer, iters, writer):
     f_loss_txt = open(os.path.join(cfg.record_path, 'loss.txt'), 'a')
     f_valid_txt = open(os.path.join(cfg.record_path, 'valid.txt'), 'a')
     rcd_time = []
@@ -330,7 +343,7 @@ def loop(cfg, train_provider, valid_provider, model,model2, SCPN, criterion, opt
         # train
         model.train()
         model2.train()
-        SCPN.eval()
+        # SCPN.eval()
         iters += 1
         t1 = time.time()
         inputs, lb, target, weightmap = train_provider.next()
@@ -362,37 +375,70 @@ def loop(cfg, train_provider, valid_provider, model,model2, SCPN, criterion, opt
         weightmap_tmp[:,:3] = weightmap_tmp[:,:3]*cfg.TRAIN.affs0_weight
         loss_emb2 = criterion(pred2, target, weightmap_tmp*mask_label)        
 
+        loss_emb = (loss_emb1+loss_emb2) * cfg.TRAIN.emb_weight
+        # print('loss_emb:', loss_emb)
 
-        #entropy map
+        #entropy map2
         pred_tmp = F.relu(pred)
         entropy = -(pred_tmp * torch.log(pred_tmp + 1e-10)+ (1-pred_tmp)*torch.log(1-pred_tmp+ 1e-10))
         entropy2 = -(pred2 * torch.log(pred2 + 1e-10)+ (1-pred2)*torch.log(1-pred2+ 1e-10))
+        # alpha_t = cfg.TRAIN.aff_thres
+        
+        # thres_mask = (pred>cfg.TRAIN.aff_thres).float() + (pred<1-cfg.TRAIN.aff_thres).float()
+        # thres_mask2 = (pred2>cfg.TRAIN.aff_thres).float() + (pred2<1-cfg.TRAIN.aff_thres).float()
+        # print(pred_tmp.min(),pred_tmp.max(),torch.mean(pred_tmp))
+        # print(pred2.min(),pred2.max(),torch.mean(pred2))
+        # print(entropy.min(),entropy.max(),torch.mean(entropy))
+        # print(entropy2.min(),entropy2.max(),torch.mean(entropy2))
+        alpha_t = cfg.TRAIN.alpha0 * pow(1-float(iters) / cfg.TRAIN.total_iters, cfg.TRAIN.power)  # 越来越小
+        # print(alpha_t)
+        gamma_t=np.percentile(entropy.flatten().cpu().detach().numpy(),100*(1-alpha_t)) #gamma_t 越来越大
+        gamma_t2=np.percentile(entropy2.flatten().cpu().detach().numpy(),100*(1-alpha_t))
+        # print('gamma_t',gamma_t)
+        # print('gamma_t2',gamma_t2)
+        thres_mask2_1 = (entropy<gamma_t).float() 
+        thres_mask2_2 = (entropy2<gamma_t2).float()
 
-       #entropy map
-        pred = F.relu(pred)
-        error_map = torch.zeros_like(pred)
-        entropy = -(pred * torch.log(pred + 1e-10)+ (1-pred)*torch.log(1-pred+ 1e-10))
-        for i in range(error_map.shape[0]):
-            error_map_tmp = SCPN(inputs, pred[:,i], entropy[:,i])
-            error_map[:,i:i+1] = error_map_tmp
+        gate = 5000
+        if iters == gate:
+            _ = build_model_SCPN(cfg, writer)
+        if iters > gate:
+            SCPN = SCPNN
+            SCPN.eval()
+            #entropy map
+            pred_tmp = F.relu(pred)
+            entropy = -(pred_tmp * torch.log(pred_tmp + 1e-10)+ (1-pred_tmp)*torch.log(1-pred_tmp+ 1e-10))
+            entropy2 = -(pred2 * torch.log(pred2 + 1e-10)+ (1-pred2)*torch.log(1-pred2+ 1e-10))
 
-        pred_bi = torch.zeros_like(pred_tmp)
-        pred_bi[pred_tmp>= 0.5] = 1
-        pred_bi[pred_tmp< 0.5] = 0
-        error_map_gt = abs(pred_bi-target)  # 0 is right 1 is false
-        error_map[error_map>= 0.5] = 1
-        error_map[error_map< 0.5] = 0
-        thres_mask = 1- error_map
+            #entropy map1
+            pred = F.relu(pred)
+            error_map = torch.zeros_like(pred)
+            entropy = -(pred * torch.log(pred + 1e-10)+ (1-pred)*torch.log(1-pred+ 1e-10))
+            for i in range(error_map.shape[0]):
+                error_map_tmp = SCPN(inputs, pred[:,i], entropy[:,i])
+                error_map[:,i:i+1] = error_map_tmp
 
-        error_map2 = torch.zeros_like(pred_tmp)
-        for i in range(error_map.shape[0]):
-            error_map_tmp2 = SCPN(inputs, pred2[:,i], entropy2[:,i])
-            error_map2[:,i:i+1] = error_map_tmp2
-        error_map2[error_map2>= 0.5] = 1
-        error_map2[error_map2< 0.5] = 0
-        thres_mask2 = 1- error_map2
-      
-        loss_emb = (loss_emb1+loss_emb2) * cfg.TRAIN.emb_weight
+            pred_bi = torch.zeros_like(pred_tmp)
+            pred_bi[pred_tmp>= 0.5] = 1
+            pred_bi[pred_tmp< 0.5] = 0
+            error_map_gt = abs(pred_bi-target)  # 0 is right 1 is false
+            error_map[error_map>= 0.5] = 1
+            error_map[error_map< 0.5] = 0
+            thres_mask1_1 = 1- error_map
+
+            error_map2 = torch.zeros_like(pred_tmp)
+            for i in range(error_map.shape[0]):
+                error_map_tmp2 = SCPN(inputs, pred2[:,i], entropy2[:,i])
+                error_map2[:,i:i+1] = error_map_tmp2
+            error_map2[error_map2>= 0.5] = 1
+            error_map2[error_map2< 0.5] = 0
+            thres_mask1_2 = 1- error_map2
+            thres_mask = thres_mask1_1 * thres_mask2_1
+            thres_mask2 = thres_mask1_2 * thres_mask2_2 
+        else:
+            thres_mask =  thres_mask2_1
+            thres_mask2 =  thres_mask2_2
+
 
         loss_emb_psudo1, _ = embedding_loss_norm_multi(embedding, pred2, weightmap*(1-mask_label)*thres_mask2, criterion, affs0_weight=cfg.TRAIN.affs0_weight,shift=cfg.DATA.shift_channels)
         loss_emb_psudo2 = criterion(pred2, pred, weightmap_tmp*(1-mask_label)*thres_mask)
@@ -451,11 +497,138 @@ def loop(cfg, train_provider, valid_provider, model,model2, SCPN, criterion, opt
 
         # display
         if iters % cfg.TRAIN.valid_freq == 0 or iters == 1:
-            show_affs(iters, inputs, error_map[:,:3], error_map_gt[:,:3], cfg.cache_path2, model_type=cfg.MODEL.model_type)
+            if iters > gate:
+                show_affs(iters, inputs, error_map[:,:3], error_map_gt[:,:3], cfg.cache_path2, model_type=cfg.MODEL.model_type)
 
             show_affs(iters, inputs, pred[:,:3], target[:,:3], cfg.cache_path, model_type=cfg.MODEL.model_type)
 
+        # valid
+        if cfg.TRAIN.if_valid:
+            if iters % cfg.TRAIN.save_freq == 0 or iters == 1:
+                device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+                model.eval()
+                model2.eval()
+                dataloader = torch.utils.data.DataLoader(valid_provider, batch_size=1, num_workers=0,
+                                                shuffle=False, drop_last=False, pin_memory=True)
+                losses_valid = []
+                for k, batch in enumerate(dataloader, 0):
+                    inputs, target, weightmap = batch
+                    inputs = inputs.cuda()
+                    target = target.cuda()
+                    weightmap = weightmap.cuda()
+                    if cfg.DATA.if_sparse:
+                        mask_instance_labeled = lb>0
+                        mask_border_labeled = target==0
+                        mask_label = mask_instance_labeled.unsqueeze(1) + mask_border_labeled
+                        mask_label = mask_label>0
+                        mask_label = mask_label.float()
+                    with torch.no_grad():
+                        embedding = model(inputs)
+                        pred2 = model2(inputs)
+                    loss_emb1, pred = embedding_loss_norm_multi(embedding, target, weightmap*mask_label, criterion, affs0_weight=cfg.TRAIN.affs0_weight,shift=cfg.DATA.shift_channels)
+                    weightmap_tmp = weightmap
+                    weightmap_tmp[:,:3] = weightmap_tmp[:,:3]*cfg.TRAIN.affs0_weight
+                    loss_emb2 = criterion(pred2, target, weightmap_tmp*mask_label)        
 
+
+                    thres_mask = (pred>cfg.TRAIN.aff_thres).float() + (pred<1-cfg.TRAIN.aff_thres).float()
+
+                    thres_mask2 = (pred2>cfg.TRAIN.aff_thres).float() + (pred2<1-cfg.TRAIN.aff_thres).float()
+                    
+
+                    loss_emb = (loss_emb1+loss_emb2) * cfg.TRAIN.emb_weight
+                    loss_emb_psudo1, _ = embedding_loss_norm_multi(embedding, pred2, weightmap*(1-mask_label)*thres_mask2, criterion, affs0_weight=cfg.TRAIN.affs0_weight,shift=cfg.DATA.shift_channels)
+                    loss_emb_psudo2= criterion(pred2, pred, weightmap_tmp*(1-mask_label)*thres_mask)
+                    loss_emb_pseudo = (loss_emb_psudo1+loss_emb_psudo2)*cfg.TRAIN.pseudo_weight
+                    loss_emb_consistency =  0
+                    tmp_loss = loss_emb + loss_emb_pseudo
+
+                    shift = 1
+                    pred[:, 1, :, :shift, :] = pred[:, 1, :, shift:shift*2, :]
+                    pred[:, 2, :, :, :shift] = pred[:, 2, :, :, shift:shift*2]
+                    pred[:, 0, :shift, :, :] = pred[:, 0, shift:shift*2, :, :]
+                    pred = F.relu(pred)
+                    losses_valid.append(tmp_loss.item())
+                    valid_provider.add_vol(np.squeeze(pred.data.cpu().numpy()))
+                epoch_loss = sum(losses_valid) / len(losses_valid)
+                out_affs = valid_provider.get_results()
+                gt_affs = valid_provider.get_gt_affs().copy()
+                gt_seg = valid_provider.get_gt_lb()
+                valid_provider.reset_output()
+                out_affs = out_affs[:3]
+                # gt_affs = gt_affs[:, :3]
+                show_affs_whole(iters, out_affs, gt_affs, cfg.valid_path)
+
+                ##############
+                # segmentation
+                if cfg.TRAIN.if_seg:
+                    if iters > 5000:
+                        fragments = watershed(out_affs, 'maxima_distance')
+                        sf = 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 50, ScoreValue, 256>>'
+                        seg_waterz = list(waterz.agglomerate(out_affs, [0.50],
+                                    fragments=fragments,
+                                    scoring_function=sf,
+                                    discretize_queue=256))[0]
+           
+                        # sf = 'OneMinus<HistogramQuantileAffinity<RegionGraphType, 50, ScoreValue, 256>>'
+   
+                        arand_waterz = adapted_rand_ref(gt_seg, seg_waterz, ignore_labels=(0))[0]
+                        voi_split_waterz, voi_merge_waterz = voi_ref(gt_seg, seg_waterz, ignore_labels=(0))
+                        voi_sum_waterz = voi_split_waterz + voi_merge_waterz
+
+                        seg_lmc = mc_baseline(out_affs)
+                        arand_lmc = adapted_rand_ref(gt_seg, seg_lmc, ignore_labels=(0))[0]
+                        voi_split_lmc, voi_merge_lmc = voi_ref(gt_seg, seg_lmc, ignore_labels=(0))
+                        voi_sum_lmc = voi_split_lmc + voi_merge_lmc
+                    else:
+                        voi_split_waterz = 0.0
+                        voi_merge_waterz = 0.0
+                        voi_split_lmc = 0.0
+                        voi_merge_lmc = 0.0
+                        voi_sum_waterz = 0.0
+                        arand_waterz = 0.0
+                        voi_sum_lmc = 0.0
+                        arand_lmc = 0.0
+                        print('model-%d, segmentation failed!' % iters)
+                else:
+                    voi_split_waterz = 0.0
+                    voi_merge_waterz = 0.0
+                    voi_split_lmc = 0.0
+                    voi_merge_lmc = 0.0
+                    voi_sum_waterz = 0.0
+                    arand_waterz = 0.0
+                    voi_sum_lmc = 0.0
+                    arand_lmc = 0.0
+                ##############
+
+                # MSE
+                whole_mse = np.sum(np.square(out_affs - gt_affs)) / np.size(gt_affs)
+                out_affs = np.clip(out_affs, 0.000001, 0.999999)
+                bce = -(gt_affs * np.log(out_affs) + (1 - gt_affs) * np.log(1 - out_affs))
+                whole_bce = np.sum(bce) / np.size(gt_affs)
+                out_affs[out_affs <= 0.5] = 0
+                out_affs[out_affs > 0.5] = 1
+                # whole_f1 = 1 - f1_score(gt_affs.astype(np.uint8).flatten(), out_affs.astype(np.uint8).flatten())
+                whole_f1 = f1_score(1 - gt_affs.astype(np.uint8).flatten(), 1 - out_affs.astype(np.uint8).flatten())
+                print('model-%d, valid-loss=%.6f, MSE-loss=%.6f, BCE-loss=%.6f, F1-score=%.6f, voi_split_waterz=%.6f,\
+                 voi_merge_waterz=%.6f, VOI-waterz=%.6f, ARAND-waterz=%.6f, voi_split_lmc=%.6f, voi_merge_lmc=%.6f, VOI-lmc=%.6f, ARAND-lmc=%.6f' % \
+                    (iters, epoch_loss, whole_mse, whole_bce, whole_f1,voi_split_waterz,voi_merge_waterz, voi_sum_waterz,\
+                         arand_waterz, voi_split_lmc,voi_merge_lmc, voi_sum_lmc, arand_lmc), flush=True)
+                writer.add_scalar('valid/epoch_loss', epoch_loss, iters)
+                writer.add_scalar('valid/mse_loss', whole_mse, iters)
+                writer.add_scalar('valid/bce_loss', whole_bce, iters)
+                writer.add_scalar('valid/f1_score', whole_f1, iters)
+                writer.add_scalar('valid/voi_waterz', voi_sum_waterz, iters)
+                writer.add_scalar('valid/arand_waterz', arand_waterz, iters)
+                writer.add_scalar('valid/voi_lmc', voi_sum_lmc, iters)
+                writer.add_scalar('valid/arand_lmc', arand_lmc, iters)
+                f_valid_txt.write('model-%d, valid-loss=%.6f, MSE-loss=%.6f, BCE-loss=%.6f, F1-score=%.6f, voi_split_waterz=%.6f,\
+                 voi_merge_waterz=%.6f, VOI-waterz=%.6f, ARAND-waterz=%.6f, voi_split_lmc=%.6f, voi_merge_lmc=%.6f, VOI-lmc=%.6f, ARAND-lmc=%.6f' % \
+                    (iters, epoch_loss, whole_mse, whole_bce, whole_f1,voi_split_waterz,voi_merge_waterz, voi_sum_waterz,\
+                         arand_waterz, voi_split_lmc,voi_merge_lmc, voi_sum_lmc, arand_lmc))
+                f_valid_txt.write('\n')
+                f_valid_txt.flush()
+                torch.cuda.empty_cache()
 
         # save
         if iters % cfg.TRAIN.save_freq == 0:
@@ -505,15 +678,18 @@ if __name__ == "__main__":
         train_provider, valid_provider = load_dataset(cfg)
         model = build_model(cfg, writer)
         model2 = build_model_aff(cfg, writer)
-        SCPN = build_model_SCPN(cfg, writer)
+        
+
         optimizer = torch.optim.Adam([{'params': model.parameters()},
                                     {'params': model2.parameters()}], lr=cfg.TRAIN.base_lr, betas=(0.9, 0.999),
                                  eps=0.01, weight_decay=1e-6, amsgrad=True)
         # optimizer = optim.Adam(model.parameters(), lr=cfg.TRAIN.base_lr, betas=(0.9, 0.999), eps=1e-8, amsgrad=False)
         # optimizer = optim.Adamax(model.parameters(), lr=cfg.TRAIN.base_l, eps=1e-8)
         model, optimizer, init_iters = resume_params(cfg, model, optimizer, cfg.TRAIN.resume)
-        model2, optimizer, init_iters = resume_params(cfg, model2, optimizer, cfg.TRAIN.resume)
-        loop(cfg, train_provider, valid_provider, model, model2, SCPN, nn.L1Loss(), optimizer, init_iters, writer)
+        model2, optimizer, init_iters = resume_params_aff(cfg, model2, optimizer, cfg.TRAIN.resume)
+        _ = build_model_SCPN(cfg, writer)
+        loop(cfg, train_provider, valid_provider, model, model2, nn.L1Loss(), optimizer, init_iters, writer)
+
         writer.close()
     else:
         pass
