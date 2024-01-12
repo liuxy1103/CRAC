@@ -57,4 +57,12 @@ python main_CRAC.py -c=CRAC_config
 
 If you have any problem with the released code and dataset, please contact me by email (liuxyu@mail.ustc.edu.cn).
 
-
+## Citation
+```shell
+@inproceedings{liu2023learning,
+  title={Learning cross-representation affinity consistency for sparsely supervised biomedical instance segmentation},
+  author={Liu, Xiaoyu and Huang, Wei and Xiong, Zhiwei and Zhou, Shenglong and Zhang, Yueyi and Chen, Xuejin and Zha, Zheng-Jun and Wu, Feng},
+  booktitle={Proceedings of the IEEE/CVF International Conference on Computer Vision},
+  pages={21107--21117},
+  year={2023}
+}
